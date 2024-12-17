@@ -1,5 +1,6 @@
 import Mathlib.Order.Basic
-import Mathlib.Data.Vector
+import Mathlib.GroupTheory.Perm.Basic
+import Mathlib.Control.Monad.Writer
 
 def hello := "world"
 
@@ -62,44 +63,18 @@ class MonadSortLawful extends MonadCmpLawful F where
   swap_idem (i j) : no_change (do {swap i j; swap i j})
   swap_cmp_swap (i j) : (do {swap i j; let b <- (j <? i : F Bool); swap i j; pure b}) ≃ i <? j
 
-instance VectorState.MonadSort [LinearOrder α] [Inhabited α] {n} : MonadSort (StateM (Vector α n)) where
-  size := n
-  cmp_at := λ i j ↦ do
-    let v <- get
-    pure (v.get i <= v.get j)
-  swap := λ i j ↦ modify (λ (v : Vector α n) ↦
-    have ih : i < n := i.2
-    have jh : j < n := j.2
-    v.swap i j ih jh)
-  forAll m := forall s, (m.run s).fst
-  forAll_pure p := by simp
+structure SortingLog (n : ℕ) : Type where
+  cmp_at : List (Fin n × Fin n)
+  swap : List (Fin n × Fin n)
 
-open MonadSort
+instance {n} : EmptyCollection (SortingLog n) where
+  emptyCollection := {cmp_at := ∅, swap := ∅}
 
-lemma Vector.swap_symm {n} {v : Vector α n} {i j : Fin n} : v.swap i j = v.swap j i := by
-  simp_rw [Vector.swap]
-  apply Vector.toArray_inj
+abbrev Perm n := Equiv.Perm (Fin n)
 
+structure SortingMonad (n : ℕ) (α : Type) : Type where
+  (run' : ReaderT (Fin n → α) (StateT (Perm (n := n)) (Writer (SortingLog n))) α)
 
-instance [LinearOrder α] [Inhabited α] {n} : MonadSortLawful (StateM (Vector α n)) where
-
-  cmp_at_refl mi := by
-    simp_rw [returns, onAll]
-    intros v
-    have : ∀ {M} [Monad M] {α β} (x : α → M β) (y : M α), (x =<< y) = (y >>= x) := λ _ _ => rfl
-    rw [this, cmp_at]
-    simp [VectorState.MonadSort]
-
-  cmp_at_trans i j k := by
-    simp [returns, onAll]
-    intros s ij jk
-    simp at *
-    apply lt_of_lt_of_le ij jk
-
-  cmp_idem i j i' j' := by simp [onAll, forAll, cmp_at]
-
-  swap_rfl i := by simp [no_change, onAll, VectorState.MonadSort]
-  swap_symm i j := by
-    simp [swap]
-  swap_idem := _
-  swap_cmp_swap := _
+def SortingMonad.run {n} (m : SortingMonad n α) (data : Fin n → α) : α × Perm n × SortingLog n :=
+  let ⟨⟨a, result⟩,  log⟩ := (m.run'.run data).run 1
+  ⟨a, result,  log⟩
