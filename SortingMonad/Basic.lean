@@ -9,18 +9,37 @@ variable {α β : Type}
 section
 variable (F : Type -> Type)
 
-class MonadSize (F) extends Monad F where
+class MonadForAll (F) extends Monad F where
+  forAll : F Prop -> Prop
+  forAll_pure (x : Prop) : forAll (pure x) = x
+
+class MonadSize (F) extends MonadForAll F where
   size : Nat
 
 class MonadSort (F) extends MonadSize F where
   swap : Fin size -> Fin size -> F Unit
   cmp_at : Fin size -> Fin size -> F Bool
-  forAll : F Prop -> Prop
-  forAll_pure (x : Prop) : forAll (pure x) = x
 
 infix:50 " ≤? " => MonadSort.cmp_at
 
 end
+
+section MonadForAll
+
+open MonadForAll
+
+variable (ω σ ε : Type) (m : Type → Type)
+
+instance : MonadForAll Id where
+  forAll := id
+  forAll_pure (_ : Prop) := rfl
+
+instance [MonadForAll m] [LawfulMonad m] [EmptyCollection ω] [Append ω] : MonadForAll (WriterT ω m) where
+  forAll mp := forAll (Prod.fst <$> mp.run)
+  forAll_pure p := by
+    simp
+    simp_rw [WriterT.run, Pure.pure]
+    rw [LawfulApplicative.map_pure, forAll_pure]
 
 section
 
@@ -73,8 +92,8 @@ instance {n} : EmptyCollection (SortingLog n) where
 instance {n} : Append (SortingLog n) where
   append old new := ⟨new.1 ++ old.1, new.2 ++ old.2⟩ -- put the new one on front
 
-structure SortingMonad (item : Type) (size : ℕ) (ret : Type) : Type where
-  (run' : ReaderT (Fin size → item) (StateT (Fin size ≃ Fin size) (Writer (SortingLog size))) ret)
+def SortingMonad (item : Type) (size : ℕ) (ret : Type) : Type :=
+  ReaderT (Fin size → item) (StateT (Fin size ≃ Fin size) (Writer (SortingLog size))) ret
 
 def test {m} [Monad m] (f : α → β → β) : ReaderT α (StateT β m) Unit := do
   let a <- read
@@ -83,27 +102,30 @@ def test {m} [Monad m] (f : α → β → β) : ReaderT α (StateT β m) Unit :=
 variable {size : ℕ} {item : Type}
 
 def SortingMonad.run (m : SortingMonad item size α) (data : Fin size → item) : α × (Fin size ≃ Fin size) × SortingLog size :=
-  let ⟨⟨a, result⟩,  log⟩ := (m.run'.run data).run 1
+  let ⟨⟨a, result⟩,  log⟩ := StateT.run (ReaderT.run m data) 1
   ⟨a, result,  log⟩
 
-def SortingMonad.swap (i j : Fin size) : SortingMonad item size Unit :=
-  {run' := modify (trans (Equiv.swap i j))}
+def SortingMonad.swap (i j : Fin size) : SortingMonad item size Unit := (modify (trans (Equiv.swap i j)) : ReaderT _ _ _)
+
+instance : Monad (SortingMonad item size) :=
+    have inst : Monad (ReaderT (Fin size → item) (StateT (Fin size ≃ Fin size) (Writer (SortingLog size)))) :=
+      inferInstance
+    inst
+
+instance [Monad (Writer ω)] : LawfulMonad (Writer ω) where
+  map_const := funext _
+  id_map a :=
+    match a with
+    | (x, w) => _
+  
 
 def SortingMonad.cmp_at [LinearOrder item] (i j : Fin size) : SortingMonad item size Bool :=
-  {run' := do
-    let start <- read
-    let swaps <- get
+  do
+    let start <- (read : ReaderT _ _ _)
+    let swaps <- (get : ReaderT _ (StateT _ _) _)
     let a := start $ swaps i
     let b := start $ swaps j
     pure (a ≤ b)
-  }
-
-instance : Monad (SortingMonad item size) where
-  bind {α _} (mx : SortingMonad item size α) fm := ⟨do
-      let (x : α) <- mx.run'
-      (fm x).run'
-  ⟩
-  pure {α} (x : α) := ⟨pure x⟩
 
 instance [Inhabited item] [LinearOrder item] : MonadSort $ SortingMonad item size where
   size := size
@@ -113,8 +135,20 @@ instance [Inhabited item] [LinearOrder item] : MonadSort $ SortingMonad item siz
   forAll_pure := by
     intros p
     simp
-    constructor
-    · intros h
-      have h' := h default
-      simp at h'
-      simp_rw [Applicative.pure]
+    simp_rw [SortingMonad.run, pure, ReaderT.run, StateT.run, ReaderT.pure, pure, StateT.pure]
+    apply Iff.intro _ (by simp)
+    intros h
+    apply h
+    apply default
+
+instance [Inhabited item] [LinearOrder item] : MonadSortLawful $ SortingMonad item size where
+  cmp_at_refl := by
+    intros mi data
+    rw [LawfulApplicative.seq_pure]
+
+  cmp_at_trans := _
+  cmp_idem := _
+  swap_rfl := _
+  swap_symm := _
+  swap_idem := _
+  swap_cmp_swap := _
