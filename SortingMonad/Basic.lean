@@ -2,8 +2,6 @@ import Mathlib.Order.Basic
 import Mathlib.GroupTheory.Perm.Basic
 import Mathlib.Control.Monad.Writer
 
-def hello := "world"
-
 variable {α β : Type}
 
 section
@@ -87,6 +85,9 @@ structure SortingLogItem (n : ℕ) where
   left : Fin n
   right : Fin n
 
+def cmp_log {n} l r := SortingLogItem.mk (n := n) false l r
+def swap_log {n} l r := SortingLogItem.mk (n := n) true l r
+
 abbrev SortingLog n := List (SortingLogItem n)
 
 abbrev SortingMonad (item : Type) (size : ℕ) (ret : Type) : Type :=
@@ -96,7 +97,11 @@ variable {size : ℕ} {item : Type}
 
 def SortingMonad.run (m : SortingMonad item size α) (data : Fin size → item) : α × (Fin size ≃ Fin size) × SortingLog size :=
   let ⟨⟨a, result⟩,  log⟩ := StateT.run (ReaderT.run m data) 1
-  ⟨a, result,  log⟩
+  ⟨a, result, log⟩
+
+@[simp]
+theorem SortingMonad.run_1 (m : SortingMonad item size α) (data : Fin size → item) :
+  (m.run data).1 = (StateT.run (ReaderT.run m data) 1).1.1 := rfl
 
 def SortingMonad.swap (i j : Fin size) : SortingMonad item size Unit := (modify (trans (Equiv.swap i j)) : ReaderT _ _ _)
 
@@ -154,9 +159,10 @@ def SortingMonad.cmp_at [LinearOrder item] (i j : Fin size) : SortingMonad item 
     let swaps <- (get : ReaderT _ (StateT _ _) _)
     let a := start $ swaps i
     let b := start $ swaps j
+    tell (cmp_log i j)
     pure (a ≤ b)
 
-instance [Inhabited item] [LinearOrder item] : MonadSort $ SortingMonad item size where
+instance [Inhabited item] [LinearOrder item] : MonadSort (SortingMonad item size) where
   size := size
   swap := SortingMonad.swap
   cmp_at := SortingMonad.cmp_at
@@ -164,11 +170,7 @@ instance [Inhabited item] [LinearOrder item] : MonadSort $ SortingMonad item siz
   forAll_pure := by
     intros p
     simp
-    simp_rw [SortingMonad.run, pure, ReaderT.run, StateT.run, ReaderT.pure, pure, StateT.pure]
-    apply Iff.intro _ (by simp)
-    intros h
-    apply h
-    apply default
+    simp_rw [pure]
 
 theorem instance_helper {item n} : ((fun _ ↦ True) <$> (get : SortingMonad item n _) = pure True) := by
       simp_rw [Functor.map, get, getThe]
@@ -198,21 +200,126 @@ theorem SortingMonad.map_run_result {item n} (f : α → β) (m : SortingMonad i
   let ((a, result), log) := (m data 1)
   simp [Functor.map, WriterT.mk]
 
+theorem swap_comm_lemma (size : ℕ) (item : Type) [Inhabited item] [LinearOrder item] (i j : Fin size) (data : Fin size → item)
+      : decide (data ((Equiv.swap i j) j) ≤ data ((Equiv.swap i j) i)) = decide
+          (data ((Equiv.trans (Equiv.swap i j) (Equiv.swap i j)) i) ≤ data ((Equiv.trans (Equiv.swap i j) (Equiv.swap i j)) j)) := by
+  simp
+
+def unfold_cmp {item size} [Inhabited item] [LinearOrder item] (i j : Fin size) (r s)
+  : (ReaderT.run (MonadSort.swap i j : SortingMonad item size Unit) r).run s = WriterT.mk ()
+
 instance [Inhabited item] [LinearOrder item] : MonadSortLawful $ SortingMonad item size where
   cmp_at_refl := by
     intros mi data
-    simp [seq_pure, MonadSort.cmp_at, SortingMonad.cmp_at, Bind.bindLeft, instance_helper]
-    simp [instance_helper2]
-    simp [SortingMonad.map_run_result]
+    let (a, w) := mi data 1
+    simp [Bind.bindLeft]
+    simp only [MonadSort.cmp_at, SortingMonad.cmp_at]
+    simp only [le_refl, decide_true]
+    simp only [bind_pure_comp, seq_pure, Functor.map_map, SortingMonad.run_1, ReaderT.run_map,
+      StateT.run_map]
+    simp only [ReaderT.run_bind, ReaderT.run_map, StateT.run_bind, StateT.run_map, map_bind,
+      Functor.map_map]
+    simp only [get, getThe, MonadStateOf.get, StateT.run]
+    simp only [read, readThe, MonadReaderOf.read, ReaderT.read, ReaderT.run]
+    let (a, b) := mi data 1
+    simp only [liftM, monadLift, MonadLift.monadLift, StateT.get]
+    simp only [map_pure, bind_pure_comp]
+    simp only [bind, WriterT.mk, Functor.map, pure, StateT.pure]
+
+    -- simp only [bind, WriterT.mk, ReaderT.run, Functor.map, pure, StateT.pure]
+    -- simp only [List.empty_eq, List.nil_append, Prod.mk.eta]
+
   cmp_at_trans := by
     intros i j k data
-    simp [seq_pure, MonadSort.cmp_at, SortingMonad.cmp_at, Bind.bindLeft, instance_helper]
-    simp [read, readThe, MonadReaderOf.read, ReaderT.read]
-    simp_rw [get, getThe, MonadStateOf.get, liftM, monadLift, MonadLift.monadLift]
-    
+    simp only [MonadSort.cmp_at, SortingMonad.cmp_at, bind_pure_comp, map_bind, Functor.map_map,
+      bind_assoc, bind_map_left, seq_pure, Bool.and_eq_false_imp, Bool.and_eq_true,
+      Bool.not_eq_eq_eq_not, Bool.not_true, decide_eq_false_iff_not, not_le, decide_eq_true_eq,
+      and_imp]
+    simp only [read, readThe, MonadReaderOf.read, ReaderT.read]
+    simp only [get, getThe, MonadStateOf.get, liftM, monadLift, MonadLift.monadLift]
+    simp only [SortingMonad.run, StateT.run, ReaderT.run, bind, ReaderT.bind, pure, Functor.map]
+    simp only [StateT.bind, StateT.pure, pure, List.empty_eq, StateT.get, StateT.map]
+    apply lt_of_lt_of_le
 
-  cmp_idem := _
-  swap_rfl := _
-  swap_symm := _
-  swap_idem := _
-  swap_cmp_swap := _
+  cmp_idem := by
+    intros i j k n start
+    simp only [MonadSort.cmp_at, SortingMonad.cmp_at]
+    simp only [bind_pure_comp, bind_assoc, bind_map_left, map_bind, Functor.map_map]
+    simp only [Seq.seq, Functor.map]
+    simp only [read, readThe, MonadReaderOf.read, ReaderT.read]
+    simp only [get, getThe, MonadStateOf.get]
+    simp only [liftM, monadLift, MonadLift.monadLift]
+    simp only [SortingMonad.run, StateT.run, ReaderT.run, bind, ReaderT.bind, pure, Functor.map]
+    simp only [StateT.bind, bind_assoc]
+    simp only [bind, WriterT.mk, StateT.pure, Functor.map, StateT.get, Prod.mk_one_one,
+      Prod.snd_one, StateT.map, Equiv.Perm.coe_one, id_eq, List.empty_eq, List.append_nil,
+      StateT.bind]
+
+  swap_rfl := by
+    intros i j k data2
+    simp only [MonadSort.swap, SortingMonad.swap, SortingMonad.run]
+    simp only [MonadSort.cmp_at, SortingMonad.run_1, SortingMonad.cmp_at]
+    simp only [Equiv.swap_self, map_bind, ReaderT.run_seq, ReaderT.run_bind, ReaderT.run_map,
+      StateT.run_seq, StateT.run_bind, StateT.run_map, bind_assoc, bind_map_left]
+    simp only [modify, modifyGet, MonadStateOf.modifyGet]
+    simp only [Equiv.instTrans_trans, Equiv.refl_trans, ReaderT.run_monadLift, monadLift_self,
+      ReaderT.run_pure, StateT.run_pure, map_pure, bind_pure_comp, pure_bind, decide_eq_decide]
+    simp only [read, readThe, MonadReaderOf.read]
+    simp only [get, getThe, MonadStateOf.get]
+    simp only [liftM, monadLift, MonadLift.monadLift]
+    simp only [ReaderT.run, StateT.run, ReaderT.read, StateT.modifyGet, StateT.get]
+    simp only [pure, StateT.pure]
+    simp only [Functor.map, WriterT.mk, bind]
+
+  swap_symm := by
+    intros i j
+    simp only [MonadSort.swap, SortingMonad.swap, Trans.trans, Equiv.swap_comm]
+
+  swap_idem := by
+    intros i₁ j₁ i₂ j₂ start
+    simp only [SortingMonad.run_1, ReaderT.run_seq, ReaderT.run_map, ReaderT.run_pure,
+      ReaderT.run_bind, id_eq, ReaderT.run_monadLift, monadLift_self, eq_mpr_eq_cast, cast_eq,
+      Prod.mk_one_one, Prod.snd_one, Prod.fst_one, Equiv.Perm.coe_one, List.nil_append, Id.map_eq,
+      List.empty_eq, bind_assoc, map_bind, StateT.run_seq, StateT.run_bind, StateT.run_map,
+      bind_map_left]
+    simp only [MonadSort.swap, SortingMonad.swap]
+    simp only [MonadSort.cmp_at, SortingMonad.cmp_at]
+    simp only [modify, modifyGet, MonadStateOf.modifyGet]
+    simp only [read, readThe, MonadReaderOf.read]
+    simp only [get, getThe, MonadStateOf.get]
+    simp only [Functor.map, WriterT.mk]
+    rw [StateT.run, ReaderT.run_monadLift, monadLift_self, StateT.modifyGet, ]
+    simp_rw [ReaderT.read, StateT.run, ReaderT.run]
+    simp only [Equiv.instTrans_trans, Equiv.Perm.trans_one]
+    simp only [liftM, monadLift, MonadLift.monadLift, bind_pure_comp, pure_bind]
+    simp only [bind, WriterT.mk, Functor.map, ReaderT.bind, StateT.bind]
+    simp only [StateT.modifyGet, pure, Equiv.swap_swap, List.empty_eq, StateT.pure, StateT.map, StateT.get]
+    simp only [bind, WriterT.mk, List.nil_append, Prod.mk.eta, Equiv.refl_apply, Id.map_eq,
+      List.append_nil]
+
+  swap_cmp_swap := by
+    intros i j data
+    simp_rw [SortingMonad.run_1, ReaderT.run_seq, ReaderT.run_map,
+      ReaderT.run_bind, StateT.run_seq, StateT.run_map, bind_map_left]
+    simp only [ReaderT.run_pure, bind_pure_comp, StateT.run_bind, StateT.run_map, bind_assoc,
+      bind_map_left]
+    simp_rw [MonadSort.swap, SortingMonad.swap]
+    simp_rw [MonadSort.cmp_at, SortingMonad.cmp_at]
+    simp_rw [modify, modifyGet, MonadStateOf.modifyGet]
+    simp_rw [read, readThe, MonadReaderOf.read]
+    simp_rw [get, getThe, MonadStateOf.get]
+    simp_rw [monadLift, MonadLift.monadLift]
+    simp_rw [ReaderT.run]
+
+
+    -- simp only [Functor.map, WriterT.mk]
+    -- rw [StateT.run, ReaderT.run_monadLift, monadLift_self, StateT.modifyGet, ]
+    -- simp_rw [ReaderT.read, StateT.run, ReaderT.run]
+    -- simp only [Equiv.instTrans_trans, Equiv.Perm.trans_one]
+    --  bind_pure_comp, pure_bind]
+    -- simp only [bind, WriterT.mk, Functor.map, ReaderT.bind, StateT.bind]
+    -- simp only [StateT.modifyGet, pure, Equiv.swap_swap, List.empty_eq, StateT.pure, StateT.map, StateT.get]
+    -- simp only [bind, WriterT.mk, List.nil_append, Prod.mk.eta, Equiv.refl_apply, Id.map_eq,
+    --   List.append_nil]
+    -- simp [MonadSize.size] at i j
+    -- apply swap_comm_lemma
