@@ -21,6 +21,17 @@ instance {Action} [ReturnType Action] : Monad (FreeMonad Action) where
     let a <- ma M interpreter
     (fm a) M interpreter
 
+theorem FreeMonad.seqLeft_default {α β Action} [ReturnType Action] (x : FreeMonad Action α) (y : FreeMonad Action β) :
+  (x <* y) = do {let a <- x; let _ <- y; pure a}:= by
+    funext M monad lawfulMonad run
+    congr
+
+theorem FreeMonad.seqRight_default {α β Action} [ReturnType Action] (x : FreeMonad Action α) (y : FreeMonad Action β) :
+  (x *> y) = do {let _ <- x; y}:= by
+    funext M monad lawfulMonad run
+    congr
+
+
 instance {Action} [ReturnType Action] : LawfulMonad (FreeMonad Action) := by
   apply LawfulMonad.mk'
   case id_map =>
@@ -39,11 +50,24 @@ instance {Action} [ReturnType Action] : LawfulMonad (FreeMonad Action) := by
   case map_const =>
     intros α β a mb
     simp [Functor.map, Functor.mapConst]
-
-variable {Action ActionRet} {α β γ} {M : Type → Type} {ω}
+  case seqLeft_eq =>
+    intros α β x y
+    apply FreeMonad.seqLeft_default
+  case seqRight_eq =>
+    intros α β x y
+    apply FreeMonad.seqRight_default
+  case bind_pure_comp := by
+    intros α β f x
+    congr
+  case bind_map := by
+    intros α β f x
+    congr
 
 section Log
 open Batteries
+
+variable {Action ActionRet} {α β γ} {M : Type → Type} {ω}
+
 
 def Log := Batteries.DList
 
@@ -94,8 +118,6 @@ instance : Monoid (Log α) where
 instance : Singleton α (Log α) where
   singleton := DList.singleton
 
-end Log
-
 def FreeMonad.withLog [Monad M] [LawfulMonad M] [ReturnType Action] (ma : FreeMonad Action α) (interpreter : (a : Action) → M (ret a)) :
   M (α × Log Action) :=
   ma (WriterT _ M) λ action ↦ do
@@ -106,3 +128,5 @@ def mkAction [ReturnType Action] (a : Action) : FreeMonad Action (ret a) :=
   λ _ _ _ run => run a
 
 prefix:20 "#" => mkAction
+
+end Log
