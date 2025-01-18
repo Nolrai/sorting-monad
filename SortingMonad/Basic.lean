@@ -1,227 +1,211 @@
 import Mathlib
-import SortingMonad.ActionLog
 
-variable {α β : Type}
+inductive GExpr (α : Type) where
+  | zero : GExpr α
+  | term (coeff : α) (power : GExpr α) (remainder : GExpr α)
 
-section
-variable (F : Type -> Type)
+notation c "×X^(" p ")+ " r => GExpr.term c p r
 
-class MonadForAll (F) extends Monad F where
-  forAll : F Prop -> Prop
-  forAll_pure (x : Prop) : forAll (pure x) = x
+def GExpr.sizeOf {α} : GExpr α → ℕ
+  | zero => 0
+  | _ ×X^( p )+ r => 1 + p.sizeOf + r.sizeOf
 
-class MonadSize (F) extends MonadForAll F where
-  size : Nat
+instance {α} : SizeOf (GExpr α) where
+  sizeOf := GExpr.sizeOf
 
-class MonadSort (F) extends MonadSize F where
-  swap : Fin size -> Fin size -> F Unit
-  cmp_at : Fin size -> Fin size -> F Bool
+variable {α β γ : Type} {n : ℕ}
 
-infix:50 " ≤? " => MonadSort.cmp_at
+instance : Zero (GExpr α) where
+  zero := GExpr.zero
 
-end
+inductive GExpr.lex_lt [PartialOrder α] : GExpr α → GExpr α → Prop where
+  | zero_lt_term (c p r) : GExpr.lex_lt 0 (c ×X^(p)+ r )
+  | lt_of_power_lt (c₀ c₁ p₀ p₁ r₀ r₁)
+    (p_lt : p₀.lex_lt p₁) : (c₀ ×X^(p₀)+ r₀ ).lex_lt (c₁ ×X^(p₁)+ r₁)
+  | lt_of_coeff_lt (c₀ c₁ p r₀ r₁)
+    (c_lt : c₀ < c₁) : (c₀ ×X^(p)+ r₀ ).lex_lt (c₁ ×X^(p)+ r₁)
+  | lt_of_remainder_lt (c p r₀ r₁)
+    (r_lt : r₀.lex_lt r₁) : (c ×X^(p)+ r₀ ).lex_lt (c ×X^(p)+ r₁)
 
-section MonadForAll
+open GExpr.lex_lt
 
-open MonadForAll
+theorem leading_powers [PartialOrder α] {c₀ c₁ : α} {p₀ p₁ r₀ r₁} :
+  (c₀ ×X^(p₀)+ r₀).lex_lt (c₁ ×X^(p₁)+ r₁) → (p₀.lex_lt p₁ ∨ p₀ = p₁) := by
+  intros h
+  cases h
+  case lt_of_power_lt p_lt =>
+    left
+    exact p_lt
+  case lt_of_coeff_lt =>
+    right
+    rfl
+  case lt_of_remainder_lt =>
+    right
+    rfl
 
-variable (ω σ ε : Type) (m : Type → Type)
+instance [PartialOrder α] : IsStrictOrder (GExpr α) GExpr.lex_lt where
+  irrefl a h := by
+    induction a
+    case zero => cases h
+    case term coeff power remainder power_ih remainder_ih =>
+      cases h
+      case lt_of_power_lt h => exact power_ih h
+      case lt_of_coeff_lt h => exact lt_irrefl _ h
+      case lt_of_remainder_lt h => exact remainder_ih h
+  trans x y z x_lt_y y_lt_z := by
+    revert x
+    induction y_lt_z
+    case zero_lt_term =>
+      intros x x_lt_y
+      cases x_lt_y
+    case lt_of_power_lt cy cz py pz ry rz py_lt_pz p_ih =>
+      intros x x_lt_y
+      cases x
+      case zero => constructor
+      case term cx px rx =>
+        cases x_lt_y
+        case lt_of_power_lt p_lt =>
+          apply GExpr.lex_lt.lt_of_power_lt
+          apply p_ih _ p_lt
+        case lt_of_coeff_lt c_lt =>
+          apply GExpr.lex_lt.lt_of_power_lt
+          apply py_lt_pz
+        case lt_of_remainder_lt =>
+          apply GExpr.lex_lt.lt_of_power_lt
+          apply py_lt_pz
+    case lt_of_coeff_lt cy cz p ry rz c_lt =>
+      intros x x_lt_y
+      cases x
+      case zero => constructor
+      case term cx px rx =>
+        cases x_lt_y
+        case lt_of_power_lt p_lt =>
+          apply GExpr.lex_lt.lt_of_power_lt
+          exact p_lt
+        case lt_of_coeff_lt c_lt2 =>
+          apply GExpr.lex_lt.lt_of_coeff_lt
+          apply lt_trans c_lt2 c_lt
+        case lt_of_remainder_lt r_lt =>
+          apply GExpr.lex_lt.lt_of_coeff_lt
+          exact c_lt
+    case lt_of_remainder_lt c p rx ry r_lt r_lt_ih =>
+      intros x x_lt_y
+      cases x
+      case zero => constructor
+      case term cx px rx =>
+        cases x_lt_y
+        case lt_of_power_lt p_lt =>
+          apply GExpr.lex_lt.lt_of_power_lt
+          exact p_lt
+        case lt_of_coeff_lt c_lt =>
+          apply GExpr.lex_lt.lt_of_coeff_lt
+          exact c_lt
+        case lt_of_remainder_lt r r_lt2 =>
+          apply GExpr.lex_lt.lt_of_remainder_lt
+          apply r_lt_ih
+          exact r_lt2
 
-instance : MonadForAll Id where
-  forAll := id
-  forAll_pure (_ : Prop) := rfl
+instance [PartialOrder α] : PartialOrder (GExpr α) := partialOrderOfSO (GExpr.lex_lt)
 
-instance [MonadForAll m] [LawfulMonad m] [EmptyCollection ω] [Append ω] : MonadForAll (WriterT ω m) where
-  forAll mp := forAll (Prod.fst <$> mp.run)
-  forAll_pure p := by
-    simp
-    simp_rw [WriterT.run, Pure.pure]
-    rw [LawfulApplicative.map_pure, forAll_pure]
+inductive GExpr.sorted [PartialOrder α] : GExpr α → Prop where
+  | zero : (0 : GExpr α).sorted
+  | mononomial c p : p.sorted → (c ×X^(p)+ 0).sorted
+  | polynomial c₁ p₁ c₀ p₀ r :
+    p₀.sorted → p₁.sorted → p₀ < p₁
+    → (c₀ ×X^(p₁)+ r).sorted
+    → (c₁ ×X^(p₁)+ (c₀ ×X^(p₁)+ r)).sorted
 
-section
+theorem GExpr.power_sorted_of_sorted [PartialOrder α] {c : α} {p r : GExpr α} :
+  (c ×X^(p)+ r).sorted → p.sorted := by
+  intro h
+  cases h
+  case mononomial h => exact h
+  case polynomial h _ _ => exact h
 
-variable {F : Type -> Type}
-open MonadSort
+theorem GExpr.remainder_sorted_of_sorted [PartialOrder α] {c : α} {p r : GExpr α} :
+  (c ×X^(p)+ r).sorted → r.sorted := by
+  intros h
+  cases h
+  case mononomial _ => constructor
+  case polynomial h => exact h
 
-def onAll (r : α → β → Prop) [MonadSort F] (a : F α) (b : F β) : Prop :=
-  forAll $ r <$> a <*> b
+def SGExpr (α) [PartialOrder α] : Type := {expr : GExpr α // expr.sorted}
 
-infix:20 " ≃ " => onAll (· = ·)
+def SGExpr.destruct [PartialOrder α] : SGExpr α → Option (α × SGExpr α × SGExpr α)
+  | ⟨0, _⟩ => none
+  | ⟨c ×X^(p )+ r, h⟩ =>
+    have p' := ⟨p, GExpr.power_sorted_of_sorted h⟩
+    have r' := ⟨r, GExpr.remainder_sorted_of_sorted h⟩
+    some <| (c, p', r')
 
-def returns [MonadSort F] (a : α) (m : F α) := m ≃ pure a
+open Option
+open Ordering
 
-notation:20 "⟨" m "⟩= " a => returns a m
+def GExpr.cmp [LinearOrder α] : ∀ (_ _ : GExpr α), Ordering
+  | 0, 0 => eq
+  | 0, (_ ×X^(_)+ _) => lt
+  | (_ ×X^(_)+ _), 0 => gt
+  | (c₀ ×X^(p₀)+ r₀), (c₁ ×X^(p₁)+ r₁) =>
+    match p₀.cmp p₁ with
+      | lt => lt
+      | gt => gt
+      | eq =>
+        match _root_.cmp c₀ c₁ with
+        | lt => lt
+        | gt => gt
+        | eq => r₀.cmp r₁
 
-abbrev Ix {size} := Fin size
-end
-
-variable (F : Type -> Type)
-
-class MonadCmpLawful extends MonadSort F where
-  cmp_at_refl (mi : F Ix) :
-  ⟨(λ i => i ≤? i) =<< mi⟩= false
-  cmp_at_trans (i j k : (Fin size)) :
-  ⟨do {
-    let ij <- i ≤? j
-    let jk <- j ≤? k
-    let ik <- i ≤? k
-    pure (not ik && ij && jk)
-  }⟩= false
-  cmp_idem (i j k n : Ix) :
-  (do {let _ <- cmp_at i j; cmp_at k n}) ≃ k ≤? n
-
-def no_change {F} [MonadSort F] (m : F α) :=
-  ∀ i j, (do {_ <- m; (i ≤? j : F Bool)}) ≃ i ≤? j
-
-class MonadSortLawful extends MonadCmpLawful F where
-  swap_rfl (i) : no_change (swap i i)
-  swap_symm (i j) : swap i j = swap j i
-  swap_idem (i j) : no_change (do {swap i j; swap i j})
-  swap_cmp_swap (i j) : (do {swap i j; let b <- (j ≤? i : F Bool); swap i j; pure b}) ≃ i ≤? j
-
-structure Swap (n : ℕ) where
-  left : Fin n
-  right : Fin left
-
-variable {n : ℕ}
-
-@[inline]
-instance : ReturnType (Swap n) where
-  ret _ := Unit
-
-open ReturnType
-
-def run_swap (a : Swap n) : StateM (Vector α n) (ret a) :=
-  modify (λ v => v.swap a.left a.right)
-
-structure Cmp (n : ℕ) where
-  left : Fin n
-  right : Fin n
-
-@[inline]
-instance : ReturnType (Cmp n) where
-  ret _ := Bool
-
-def run_cmp (a : Cmp n) [LinearOrder α] : StateM (Vector α n) (ret a) := do
-  let (v : Vector α n) <- get
-  pure <| decide <| (v.get a.left) < (v.get a.right)
-
-abbrev SortingAction (n) := (Swap n ⊕ Cmp n)
-
-instance [ReturnType α] [ReturnType β] : ReturnType (α ⊕ β) where
-  ret a := a.rec ReturnType.ret ReturnType.ret
-
-def SortingAction.run {n} [LinearOrder α] (a : SortingAction n) :
-  StateM (Vector α n) (ret a) :=
-  match a with
-  | Sum.inl swap => run_swap swap
-  | Sum.inr cmp => run_cmp cmp
-
-def Swap.castLE {m} (n_le_m : n ≤ m) : Swap n → Swap m
-  | Swap.mk l r => Swap.mk (l.castLE n_le_m) <| r.castLE <| by simp only [Fin.coe_castLE, le_refl]
-
-def Cmp.castLE {m} (n_le_m : n ≤ m) : Cmp n → Cmp m
-  | {left := left, right := right} => {left := left.castLE n_le_m, right := right.castLE n_le_m}
-
-def SortingAction.castLE {m} (n_le_m : n ≤ m) : SortingAction n → SortingAction m :=
-  bimap (Swap.castLE n_le_m) (Cmp.castLE n_le_m)
-
-def SortingMonad n := FreeMonad (SortingAction n)
-
-instance : Monad (SortingMonad n) := (inferInstance : Monad (FreeMonad (SortingAction n)))
-
-instance : LawfulMonad (SortingMonad n) := (inferInstance : LawfulMonad (FreeMonad (SortingAction n)))
-
-def cmp_at (i : Fin n) (j : Fin n) : SortingMonad n Bool :=
-  # (Sum.inr (Cmp.mk i j))
-
-def swap_at (i : Fin n) (j : Fin i) : SortingMonad n Unit :=
-  # (Sum.inl (Swap.mk i j))
-
-def compare_and_swap (i : Fin n) (j : Fin i) : SortingMonad n Unit := do
-  let b <- cmp_at i (j.castLE i.2)
-  if b
-    then swap_at i j
-    else pure ()
-
-def bubbleSort : FreeMonad (SortingAction n) Unit :=
-    for i in List.finRange n do
-    for j in List.finRange i.1 do
-      compare_and_swap i j
-
-def inversions [LinearOrder α] : List α → ℕ
-  | [] => 0
-  | x :: xs => (xs.filter (not ∘ ↑(x ≤ ·))).length
-
-def SortingMonad.run
-  (m : SortingMonad n α)
-  [LinearOrder β]
-  (v₀ : Vector β n)
-  : α × Vector β n
-  := flip StateT.run v₀ <| FreeMonad.run m SortingAction.run
-
-def as_modify {α} [LinearOrder α]
-  (m : SortingMonad n Unit) (v₀ : Vector α n) : Vector α n :=
-    Prod.snd <| m.run v₀
-
-theorem as_modify_swap_at [LinearOrder α] {i j} :
-  as_modify (swap_at i j) = (λ v : Vector α n => v.swap i j) := by
-  funext v
-  simp [swap_at, SortingMonad.run, as_modify]
-  simp [FreeMonad.run, flip, StateT.run, mkAction, SortingAction.run, run_swap]
-  simp [modify, modifyGet, MonadStateOf.modifyGet, StateT.modifyGet]
-
-theorem as_modify_compare_and_swap [LinearOrder α] {i j} :
-  as_modify (compare_and_swap i j) =
-    λ v : Vector α n =>
-    if v[Fin.castLE i.2 j] < v[i]
-    then v.swap i j
-    else v := by
-  funext v
-  simp [compare_and_swap]
-  simp [swap_at, cmp_at, SortingMonad.run, as_modify, FreeMonad.run]
-  simp [flip, StateT.run, pure, bind, StateT.bind, mkAction, SortingAction.run,
-        run_cmp, get, getThe, MonadStateOf.get, Functor.map, StateT.map, StateT.get, pure,
-        bind, StateT.bind, StateT.get, pure, StateT.pure]
-  split_ifs
-  · simp [mkAction, SortingAction.run, run_swap, modify, modifyGet, MonadStateOf.modifyGet, StateT.modifyGet]
-  case neg h₁ h₂ =>
-    exfalso
-    apply h₂
-    apply h₁
-  case pos h₁ h₂ =>
-    exfalso
-    apply h₁
-    apply h₂
-  · simp [pure, StateT.pure]
-
-theorem as_modify_seq [LinearOrder α]  (f g : SortingMonad n Unit) :
-  as_modify (f *> g) = (as_modify g ∘ as_modify f : Vector α n → Vector α n) := by
-  funext v
-  simp [as_modify, seqRight_eq_bind, SortingMonad.run, FreeMonad.run, flip, StateT.run]
-  simp [bind, StateT.bind]
-  congr
-
-def sorted_at [LT α] (v : Vector α n) (i j : Fin n) : Prop := v.get i < v.get j ↔ j < i
-
-theorem compare_and_swap.after
-  [LinearOrder α]
-  (v : Vector α n) (i j) : sorted_at (as_modify (compare_and_swap i j) v) (Fin.castLE i.2 j) i := by
-  simp [sorted_at, as_modify_compare_and_swap]
-  apply Iff.trans (b := False)
-  case h₂ =>
-    have ⟨i, i_lt_n⟩ := i
-    have ⟨j, j_lt_i⟩ := j
-    simp only [Fin.castLE_mk, Fin.mk_lt_mk, false_iff, not_lt, ge_iff_le]
-    simp at j_lt_i
-    apply le_of_lt j_lt_i
-  split_ifs
-  case pos vj_lt_vi =>
-    simp only [Vector.swap, Vector.get_mk, Fin.getElem_fin, Fin.coe_castLE,
-      Array.getElem_swap_right, Vector.getElem_toArray, Array.getElem_swap_left, iff_false, not_lt]
-    apply le_of_lt vj_lt_vi
-  case neg vj_not_lt_vi =>
-    simp at *
-    assumption
+theorem GExpr.cmp_spec [LinearOrder α] : ∀ (a b : GExpr α), (a.cmp b).Compares a b
+  | 0, 0 => rfl
+  | 0, (_ ×X^(_)+ _) => by
+    simp [GExpr.cmp]
+    apply zero_lt_term
+  | (_ ×X^(_)+ _), 0 => by
+    simp [GExpr.cmp]
+    apply zero_lt_term
+  | (c₀ ×X^(p₀)+ r₀), (c₁ ×X^(p₁)+ r₁) => by
+    simp [GExpr.cmp]
+    match p₀.cmp p₁, p₀.cmp_spec p₁ with
+    | lt, h =>
+      simp only [compares_lt, gt_iff_lt]
+      apply lt_of_power_lt
+      exact h
+    | gt, h =>
+      simp only [compares_gt, gt_iff_lt]
+      apply lt_of_power_lt
+      exact h
+    | eq, h =>
+      simp at *
+      cases h
+      have : (_root_.cmp c₀ c₁).Compares c₀ c₁ := cmp_compares _ _
+      match _root_.cmp c₀ c₁, this with
+      | lt, c_h =>
+        simp
+        apply lt_of_coeff_lt
+        exact c_h
+      | gt, c_h =>
+        simp
+        apply lt_of_coeff_lt
+        exact c_h
+      | eq, c_h =>
+        simp
+        cases c_h
+        match r₀.cmp r₁, r₀.cmp_spec r₁ with
+        | lt, r_h =>
+          simp
+          apply lt_of_remainder_lt
+          exact r_h
+        | gt, r_h =>
+          simp
+          apply lt_of_remainder_lt
+          exact r_h
+        | eq, r_h =>
+          cases r_h
+          rfl
 
 
+
+
+
+instance [LinearOrder α] : LinearOrder (GExpr α) := by
+  apply linearOrderOfCompares GExpr.cmp
