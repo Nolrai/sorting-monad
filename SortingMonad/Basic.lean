@@ -423,9 +423,13 @@ theorem inBase_sorted (base input) : (inBase base input).sorted := by
   induction input using Nat.strongRecOn
   case ind n n_ih =>
     rw [inBase]
+    simp
     split_ifs
-    case pos h => constructor
-    case neg h =>
+    case neg h => constructor
+    case pos h =>
+      let ⟨base_non_trivial, n_ne_zero⟩ := h
+      have base_pos : 0 < base := by
+        apply lt_of_lt_of_le zero_lt_two base_non_trivial
       dsimp only [ne_eq]
       set toGExpr := inBase base
       have p_sorted : (toGExpr (Nat.log base n)).sorted := by
@@ -477,7 +481,7 @@ theorem inBase_sorted (base input) : (inBase base input).sorted := by
         case pos nat_r_pos =>
           let ⟨c₀, p₀, r₀, h⟩ : ∃ c₀ p₀ r₀, toGExpr nat_r = GExpr.term c₀ p₀ r₀ := by
             simp [toGExpr]
-            rw [inBase, dif_neg]
+            rw [inBase, dif_pos]
             · simp
             simp at *
             apply And.intro h.left
@@ -487,11 +491,20 @@ theorem inBase_sorted (base input) : (inBase base input).sorted := by
           apply GExpr.sorted.polynomial
           exact p_sorted
           simp [toGExpr] at h
-          rw [inBase, dif_neg] at h
+          rw [inBase, dif_pos] at h
           simp at h
           rw [← h.right.left]
+          apply inBase_mono base _ _ base_non_trivial log_r_lt_log_n
+          apply And.intro base_non_trivial (Nat.pos_iff_ne_zero.mp nat_r_pos)
+          rw [←h]
+          · apply n_ih
+            apply remainder_lt
+            · constructor
+              · assumption
+              · assumption
 
-end inBase
+
+end GoldstienNumber
 
 open Ordinal
 
