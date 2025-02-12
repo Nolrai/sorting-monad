@@ -12,12 +12,18 @@ instance : Zero (GExpr α) where
 
 notation c "×X^(" p ")+ " r => GExpr.term p c r
 
-def GExpr.sizeOf : GExpr α → ℕ
+def GExpr.sizeOf' : GExpr α → ℕ
   | 0 => 0
-  | _ ×X^( p )+ r => 1 + p.sizeOf + r.sizeOf
+  | _ ×X^( p )+ r => 1 + p.sizeOf' + r.sizeOf'
 
 instance : SizeOf (GExpr α) where
-  sizeOf := GExpr.sizeOf
+  sizeOf := GExpr.sizeOf'
+
+@[simp]
+theorem GExpr.sizeOf_zero : sizeOf (0 : GExpr α) = 0 := rfl
+
+@[simp]
+theorem GExpr.sizeOf_term (c : α) (p r) : sizeOf (c ×X^( p )+ r) = 1 + sizeOf p + sizeOf r := rfl
 
 def GExpr.height {α} : GExpr α → ℕ
   | 0 => 0
@@ -251,7 +257,6 @@ end cmp
 
 instance [LinearOrder α] : LinearOrder (GExpr α) := linearOrderOfCompares GExpr.cmp GExpr.cmp_Compares
 
-section toSorted
 
 class Zero' (α : Type*) extends AddSemigroup α where
   toZero : α → α
@@ -284,85 +289,9 @@ theorem toZero_const [Zero' α] : ∀ {x y : α}, toZero x = toZero y := by
   · rw [Zero'.right_id (toZero x)]
   · rw [Zero'.left_id x]
 
-namespace ToSorted
-
-def toFinmap [Zero' α] [LinearOrder α] : List (α × GExpr α) → Finmap (λ _ : GExpr α => α)
-  | [] => ∅
-  | (coeff, power) :: xs =>
-    let soFar := toFinmap xs
-    if coeff = toZero coeff then soFar
-    else
-      let newCoeff :=
-        match soFar.lookup power with
-        | none => coeff
-        | some oldCoeff => coeff + oldCoeff
-      soFar.insert power newCoeff
-
-@[simp]
-theorem empty_entries {S : α → Type} : (∅ : Finmap S).entries = (∅ : Multiset _) := rfl
-
-@[simp]
-theorem List.empty_entries : [].toGExpr = (0 : GExpr α) := rfl
-
-@[simp]
-theorem toFinmap_empty [Zero' α] [LinearOrder α] : toFinmap ([] : List (α × GExpr α)) = ∅ := rfl
-
-def sort_aux_swap : ((_ : GExpr α) × α) → (α × GExpr α)
-  | ⟨a, b⟩ => ⟨b, a⟩
-
-abbrev lt₂ {α} [Zero' α] [LinearOrder α] (_ : GExpr α) (a b : α) := a < b
-
-instance [LinearOrder α] [Zero' α] : IsIrrefl ((_ : GExpr α) × α) (Sigma.Lex (· < ·) lt₂) where
-  irrefl
-    | ⟨a₁, a₂⟩ => by simp [Sigma.lex_iff]
-
-
-instance [LinearOrder α] [Zero' α] : IsStrictTotalOrder ((_ : GExpr α) × α) (Sigma.Lex (· < ·) lt₂) where
-
-instance [LinearOrder α] [Zero' α] : LinearOrder ((_ : GExpr α) × α) :=
-  linearOrderOfSTO (r := Sigma.Lex (· < ·) lt₂)
-
-def sort_aux [Zero' α] [LinearOrder α] (l : List (α × GExpr α)) : GExpr α :=
-  let collated : Multiset ((_ : GExpr α) × α) := (toFinmap l).entries
-  have instLO : LinearOrder ((_ : GExpr α) × α) := inferInstance
-  have : DecidableRel _ := by apply instLO.decidableLE
-  let sorted : List ((_ : GExpr α) × α) := Multiset.sort instLO.le collated
-  let swapped : List (α × GExpr α) := sorted.map sort_aux_swap
-  List.toGExpr swapped
-
-@[simp]
-theorem sort_aux_empty [Zero' α] [LinearOrder α] : sort_aux ([] : List (α × GExpr α)) = 0 := by
-  simp [sort_aux]
-
-
-end ToSorted
-
-def GExpr.sort [Zero' α] [LinearOrder α] : GExpr α → GExpr α :=
-  GExpr.byLevel ToSorted.sort_aux
-
-@[simp]
-theorem sort_aux_singleton [Zero' α] [LinearOrder α] (c p) (c_ne_zero : c ≠ toZero c) : ToSorted.sort_aux ([(c, GExpr.sort p)]
-  : List (α × GExpr α)) = c ×X^( p.sort)+ 0 := by
-  simp [ToSorted.sort_aux, ToSorted.toFinmap]
-  split_ifs
-  case pos h => exfalso; apply c_ne_zero; assumption
-  case neg c_ne =>
-  simp [← Finmap.empty_toFinmap, ToSorted.sort_aux_swap, List.toGExpr]
-
-@[simp]
-theorem sort_aux_c_zero [Zero' α] [LinearOrder α] (c p) : ToSorted.sort_aux ([(toZero c, GExpr.sort p)]
-  : List (α × GExpr α)) = 0 := by
-  simp [ToSorted.sort_aux, ToSorted.toFinmap]
-  rw [if_pos]
-  rw [ToSorted.empty_entries, Multiset.empty_eq_zero, Multiset.sort_zero]
-  simp
-  · apply toZero_const
-
-end toSorted
-
 inductive GExpr.sorted [PartialOrder α] [Zero' α] : GExpr α → Prop where
   | zero : (0 : GExpr α).sorted
-  | mononomial {c p} : ne_zero' c → p.sorted → (c ×X^(p)+ 0).sorted
+  | monomial {c p} : ne_zero' c → p.sorted → (c ×X^(p)+ 0).sorted
   | polynomial {c₁ p₁ c₀ p₀ r}
     (c₁_ne_zero' : ne_zero' c₁)
     (p₁_sorted : p₁.sorted)
@@ -382,74 +311,184 @@ theorem GExpr.zero_toList : (0 : GExpr α).toList = [] := rfl
 @[simp]
 theorem GExpr.term_toList {c p r} : (c ×X^(p)+ r : GExpr α).toList = (c, p) :: r.toList := rfl
 
-@[simp]
-theorem GExpr.sort_zero [Zero' α] [LinearOrder α] : (0 : GExpr α).sort = 0 := by
-  simp [sort, byLevel]
-  simp [byLevel_aux] --needs to be seperate so we dont infinately recurse
-
 instance (a : α) [Zero' α] [LinearOrder α] : Decidable (ne_zero' a) := by
   simp [ne_zero']
   infer_instance
 
-@[simp]
-theorem GExpr.sort_monomial [Zero' α] [LinearOrder α] {c p} : (c ×X^( p )+ 0 : GExpr α).sort =
-  if ne_zero' c
-  then (c ×X^( p.sort )+ 0 : GExpr α)
-  else 0 := by
-  have : byLevel ToSorted.sort_aux p = p.sort := rfl
-  split_ifs
-  case pos h =>
-    simp [GExpr.sort]
-    rw [byLevel, byLevel_aux, GExpr.toList, GExpr.toList_zero, List.empty_eq]
-    simp
-    rw [this, sort_aux_singleton]
-    · apply h
-  case neg h =>
-    simp [GExpr.sort]
-    rw [byLevel, byLevel_aux, GExpr.toList, GExpr.toList_zero, List.empty_eq]
-    simp [ne_zero'] at h
-    rw [h]
-    simp
-    rw [this, sort_aux_c_zero]
-
-theorem GExpr.sort'_sorted [LinearOrder α] [Zero' α] : (expr : GExpr α) → expr.sort.sorted
-  | 0 => by simp
-  | c ×X^( p )+ 0 => by
-    simp
-    split_ifs
-    case pos h =>
-      apply sorted.mononomial h (GExpr.sort'_sorted p)
-  | c₁ ×X^( p₁ )+ c₀ ×X^( p₀ )+ r₀ => by
-    
-
-theorem GExpr.power_sorted_of_sorted [PartialOrder α] [Zero' α] {c : α} {p r : GExpr α} :
+theorem GExpr.sorted.power [PartialOrder α] [Zero' α] {c : α} {p r : GExpr α} :
   (c ×X^(p)+ r).sorted → p.sorted := by
   intro h
   cases h
-  case mononomial h _ => exact h
+  case monomial h _ => exact h
   case polynomial c₀ c_ne_zero p₀ r remainder_sorted p_sorted p₀_lt_p _ => exact p_sorted
 
-theorem GExpr.remainder_sorted_of_sorted [PartialOrder α] [Zero' α] {c : α} {p r : GExpr α} :
+theorem GExpr.sorted.remainder [PartialOrder α] [Zero' α] {c : α} {p r : GExpr α} :
   (c ×X^(p)+ r).sorted → r.sorted := by
   intros h
   cases h
-  case mononomial _ => exact GExpr.sorted.zero
+  case monomial _ => exact GExpr.sorted.zero
   case polynomial c₀ p₀ r remainder_sorted c_ne_zero p_sorted p₀_lt_p => exact remainder_sorted
 
 theorem GExpr.ne_zero'_of_sorted [PartialOrder α] [Zero' α] {c : α} {p r} : (c ×X^(p)+ r).sorted -> ne_zero' c := by
   intros h
   cases h
-  case mononomial h => exact h
+  case monomial h => exact h
   case polynomial h => exact h
 
 abbrev SGExpr (α) [PartialOrder α] [Zero' α] : Type := {expr : GExpr α // expr.sorted}
 
+instance [PartialOrder α] [Zero' α] : Zero (SGExpr α) where
+  zero := ⟨0, by constructor⟩
+
+theorem SGExpr.zero_def [PartialOrder α] [Zero' α] : (0 : SGExpr α) = ⟨0, by constructor⟩ := rfl
+
+@[simp]
+theorem SGExpr.zero_val [PartialOrder α] [Zero' α] : (0 : SGExpr α).val = 0 := rfl
+
 def SGExpr.destruct [PartialOrder α] [Zero' α] : SGExpr α → Option (α × SGExpr α × SGExpr α)
   | ⟨0, _⟩ => none
   | ⟨c ×X^(p )+ r, h⟩ =>
-    have p' := ⟨p, GExpr.power_sorted_of_sorted h⟩
-    have r' := ⟨r, GExpr.remainder_sorted_of_sorted h⟩
+    have p' := ⟨p, h.power⟩
+    have r' := ⟨r, h.remainder⟩
     some <| (c, p', r')
+
+@[simp]
+theorem SGExpr.destruct_term [PartialOrder α] [Zero' α] (c : α) (p r : GExpr α) (h) :
+  SGExpr.destruct ⟨c ×X^(p )+ r, h⟩ = some (c, ⟨p, h.power⟩, ⟨r, h.remainder⟩) := rfl
+
+@[simp]
+theorem SGExpr.zero [PartialOrder α] [Zero' α] :
+  SGExpr.destruct (0 : SGExpr α) = none := rfl
+
+@[simp]
+theorem SGExpr.zero' [PartialOrder α] [Zero' α] (h) :
+  SGExpr.destruct (⟨0, h⟩ : SGExpr α) = none := rfl
+
+@[simp]
+theorem SGExpr.destruct_sizeOf [PartialOrder α] [Zero' α] (x) {p r : SGExpr α} {c} (h : SGExpr.destruct x = some (c, p, r)) : sizeOf x = sizeOf p + sizeOf r := by
+  let ⟨x, x_sorted⟩ := x
+  revert p r h
+  induction x
+  case zero =>
+    intros p r h
+    exfalso
+    simp [SGExpr.destruct] at h
+  case term power coeff remainder power_ih remainder_ih =>
+    intros p r h
+    simp [SGExpr.destruct] at h
+    simp at *
+    let ⟨h₀, h₁, h₂⟩ := h
+    cases h₀
+    cases h₁.symm
+    cases h₂.symm
+    clear h₁ h₂ h
+    simp at *
+    ring_nf
+
+theorem SGExpr.destruct_sizeof_power [PartialOrder α] [Zero' α] (x) {p r : SGExpr α} {c} (h : SGExpr.destruct x = some (c, p, r)) : sizeOf p < sizeOf x := by
+  rw [SGExpr.destruct_sizeOf x h]
+  simp
+  let ⟨r, r_h⟩ := r
+  simp
+
+theorem SGExpr.destruct_sizeof_remainder [PartialOrder α] [Zero' α] (x) {p r : SGExpr α} {c} (h : SGExpr.destruct x = some (c, p, r)) : sizeOf r < sizeOf x := by
+  rw [SGExpr.destruct_sizeOf x h]
+  simp
+  let ⟨p, p_h⟩ := p
+  simp
+
+def SGExpr.toDecList [LinearOrder α] [Zero' α] (x : SGExpr α) : List (α × SGExpr α) :=
+  match h : x.destruct with
+  | none => []
+  | some (c, p', r') =>
+    have : sizeOf r' < sizeOf x := SGExpr.destruct_sizeof_remainder x h
+    (c, p') :: r'.toDecList
+  termination_by (sizeOf x)
+
+@[simp]
+theorem SGExpr.toDecList_zero [LinearOrder α] [Zero' α] {h} : SGExpr.toDecList ⟨(0 : GExpr α) , h⟩  = [] := by
+  rw [toDecList]
+  simp [SGExpr.destruct]
+
+@[simp]
+theorem SGExpr.toDecList_zero' [LinearOrder α] [Zero' α] : (0 : SGExpr α).toDecList  = [] := by
+  rw [OfNat.ofNat]
+  simp [Zero.toOfNat0, Zero.zero]
+
+@[simp]
+theorem SGExpr.toDecList_term [LinearOrder α] [Zero' α] (c : α) (p r h) :
+  SGExpr.toDecList ⟨c ×X^(p)+ r, h⟩ = (c, ⟨p, h.power⟩) :: SGExpr.toDecList ⟨r, h.remainder⟩ := by
+  rw [SGExpr.toDecList]
+  simp
+
+abbrev gt₂ [Preorder β] (x y : α × β) : Prop := x.2 > y.2
+
+instance [Preorder β] : IsTrans (α × β) gt₂ where
+  trans x y z xy yz := by
+    simp at *
+    apply lt_trans yz xy
+
+def SGExpr.toDecList.sortedBy [LinearOrder α] [Zero' α] : ∀ x : SGExpr α, x.toDecList.Sorted gt₂
+  | ⟨x, x_sorted⟩ => by
+    induction x_sorted
+    case zero => simp
+    case monomial => simp
+    case polynomial c₁ p₁ c₀ p₀ r c₁_ne_zero' p₁_sorted p₀_lt_p₁ remainder_sorted p₁_ih r_ih =>
+      simp
+      simp at r_ih
+      let ⟨r_ih_here, r_ih_there⟩ := r_ih
+      split_ands
+      · exact p₀_lt_p₁
+      · intros a b h a_b_in
+        apply lt_trans _ p₀_lt_p₁
+        apply r_ih_here
+        apply a_b_in
+      · apply r_ih_here
+      · exact r_ih_there
+
+mutual
+
+def SGExpr.mk (c₀ p₀ r)
+
+def List.toSGExpr [LinearOrder α] [Zero' α] : ∀ (l : List (α × SGExpr α)), l.Sorted gt₂ → SGExpr α
+  | [], _ => 0
+  | (c₁, p₁) :: xs, h =>
+    if c₁_h : c₁ = toZero c₁
+    then xs.toSGExpr (h.tail)
+    else match xs with
+    | [] => ⟨c₁ ×X^(p₁)+ 0, _⟩
+    | (c₀, p₀) :: r =>
+      if c₀_h : c₀ = toZero c₁
+      then by
+        apply ((c₁, p₁) :: r).toSGExpr
+        simp at *
+        let ⟨⟨h₀, h₁⟩, h₂, h₃⟩ := h
+        apply And.intro _ h₃
+        apply h₁
+      else ⟨c₁ ×X^(p₁)+ c₀ ×X^(p₀)+ r.toSGExpr _, by
+        apply GExpr.sorted.polynomial c₁_h p₁.2
+        · rw [List.sorted_cons_cons] at h
+          apply h.1
+        · have : List.Sorted gt₂ ((c₀, p₀) :: r) := by
+            rw [sorted_cons] at h
+            apply h.2
+          apply (List.toSGExpr _ this).2
+      ⟩
+
+def SGExpr.add [LinearOrder α] [Zero' α] (left right : SGExpr α) : SGExpr α :=
+  let gt₂' (x y : α × GExpr α) := decide (gt₂ x y)
+  let list := List.merge left.toDecList right.toDecList
+  list.toSGExpr _
+
+instance [Semiring α] [LinearOrder α] : Semiring (SGExpr α) where
+  add a b := SGExpr.add
+
+def GExpr.sort_aux [Zero' α] [LinearOrder α] : List (α × GExpr α) → SGExpr α
+
+def GExpr.sort [Zero' α] [LinearOrder α] : GExpr α → SGExpr α :=
+  GExpr.byLevel GExpr.sort_aux
+
+end toSorted
 
 open Option
 open Ordering
@@ -742,7 +781,7 @@ theorem inBase_sorted {base input} : (inBase base input).sorted := by
       case pos nat_log_base_n_eq_zero =>
         simp [nat_log_base_n_eq_zero, Nat.mod_one]
         simp [toGExpr]
-        apply GExpr.sorted.mononomial
+        apply GExpr.sorted.monomial
         apply digit_ne_zero'
         apply GExpr.sorted.zero
       case neg nat_log_n_pos =>
