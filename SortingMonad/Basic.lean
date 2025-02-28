@@ -43,9 +43,26 @@ structure Terms (κ π : Type) [Zero' κ] [π_lo : LinearOrder π] where
   (term : Fin length → Term κ π)
   (ordered : ∀ i j, i < j → (term i).power > (term j).power)
 
-variable {κ π : Type} [π_lo : LinearOrder π] [LinearOrder κ] [Zero' κ]
+variable {κ π : Type} [π_lo : LinearOrder π] [Zero' κ]
 
 infix:50 "·X^" => Term.mk
+
+def Terms.cons (x : Term κ π) (xs : Terms κ π)
+  (x_gt_xs : ∀ i, (xs.term i).power < x.power)
+  : Terms κ π where
+  length := xs.length + 1
+  term := Fin.cons x xs.term
+  ordered i j i_lt_j :=
+    match i, j, i_lt_j with
+    | ⟨_, _⟩, ⟨0, _⟩, i_lt_j => by cases i_lt_j
+    | ⟨0, _⟩, ⟨j+1, h_j⟩, i_lt_j => x_gt_xs ⟨j, by rw [add_lt_add_iff_right] at h_j; exact h_j⟩
+    | ⟨i+1, h_i⟩, ⟨j+1, h_j⟩, i_lt_j => by
+      simp [Fin.cons]
+      apply xs.ordered
+      simp at i_lt_j
+      assumption
+
+variable [LinearOrder κ]
 
 inductive Term.lt : Term κ π → Term κ π → Prop where
   | power {p₀ p₁} {c₀ c₁} : p₀ < p₁ → Term.lt (c₀·X^p₀) (c₁·X^p₁)
@@ -63,8 +80,6 @@ theorem Term.lt_iff' (p₀ p₁ : π) (c₀ c₁ : NonZero κ) : Term.lt (c₀·
     case inr h =>
       rw [h.1]
       apply Term.lt.coeff h.2
-
-variable [LinearOrder κ]
 
 instance Term.sto : IsStrictTotalOrder (Term κ π) Term.lt where
   irrefl a := by
@@ -142,6 +157,52 @@ namespace Terms
 
 variable {κ π} [Zero' κ] [LinearOrder π]
 
+instance : Zero (Terms κ π) where
+  zero := ⟨0, λ x => x.elim0, by simp⟩
+
+theorem zero_eq : (0 : Terms κ π) = ⟨0, λ x => x.elim0, by simp⟩ := rfl
+
+theorem length_eq_zero_iff {x : Terms κ π} (h : x.length = 0) : x = 0 := by
+  let ⟨xl, xt, xo⟩ := x
+  rw [Terms.zero_eq]
+  simp at *
+  cases h
+  simp
+  funext i
+  apply i.elim0
+
+def induction (motive : Terms κ π → Sort u)
+  (P0 : motive 0)
+  (PCons : ∀ xs, motive xs →
+    ∀ x, (x_gt_xs : ∀ i, (xs.term i).power < x.power) →
+    motive (xs.cons x x_gt_xs))
+  : ∀ (xs : Terms κ π), motive xs := by
+  intros xss
+  let ⟨xl, xt, xo⟩ := xss
+  induction xl
+  case zero =>
+    have : ({length := 0, term := xt, ordered := xo} : Terms κ π).length = 0 := rfl
+    simp [length_eq_zero_iff]
+    apply P0
+  case succ l l_ih =>
+    let head := xt 0
+    let tail_terms := Fin.tail xt
+    have tail_ordered : ∀ i j, i < j → (tail_terms j).power < (tail_terms i).power := by
+      intros i j i_lt_j
+      apply xo
+      simp
+      assumption
+    let tail : Terms κ π := {length := l, term := tail_terms, ordered := tail_ordered}
+    have head_gt : ∀ i, (tail.term i).power < head.power := by
+      intros i
+      apply xo _ _ (Fin.succ_pos _)
+    have : {length := l + 1, term := xt, ordered := xo} = tail.cons head head_gt := by
+      simp [cons, tail]
+      rw [Fin.cons_self_tail]
+    rw [this]
+    apply PCons
+    apply l_ih
+
 def term' (x : Terms κ π) (n : ℕ) : WithBot (Term κ π) :=
   if h : n < x.length
   then ↑(x.term ⟨n, h⟩)
@@ -207,6 +268,7 @@ variable {κ π} [Zero' κ] [LinearOrder κ] [LinearOrder π]
 
 def test : LinearOrder (Term κ π) := by infer_instance
 
+
 def lt (x y : Terms κ π) : Prop := toLex x.term' < toLex y.term'
 
 @[simp]
@@ -230,8 +292,19 @@ instance isSTO : IsStrictTotalOrder (Terms κ π) Terms.lt where
     rw [this]
     apply trichotomous (r := (· < ·)) (a := toLex a.term') (b := toLex b.term')
 
+
+
 instance : DecidableRel (α := Terms κ π) Terms.lt := by
-  simp
+  intros a
+  induction a using Terms.induction
+  case P0 =>
+    intros b
+    induction b using Terms.induction
+    case P0 => left; simp
+    case PCons =>
+
+
+
 
 instance : LinearOrder (Terms κ π) := linearOrderOfSTO (α := (Terms κ π)) Terms.lt
 
@@ -293,6 +366,58 @@ def lift₁ : {n : ℕ} → {f : Raw κ n → Raw κ (n+1) // ∀ x y, x < y →
         apply i_lt_j
     }
 
-def lift {n : ℕ} : {m : ℕ} → Raw κ n → Raw κ (n + m)
+def lift₂ {n : ℕ} : {m : ℕ} → Raw κ n → Raw κ (n + m)
   | 0, x => x
-  | m+1, x => lift₁.val (lift (m := m) x)
+  | m+1, x => lift₁.val (lift₂ (m := m) x)
+
+def lift₃ {n: ℕ} {m : ℕ} (n_le_m : n ≤ m) : Raw κ n → Raw κ m :=
+  have : m = n + (m - n) := (Nat.add_sub_cancel' n_le_m).symm
+  by
+  rw [this]
+  exact lift₂ (n := n) (κ := κ) (m := m - n)
+
+def onLift : Sigma (Raw κ) → Sigma (Raw κ) → Prop :=
+  λ a b =>
+    ∃ (k : ℕ) (a_le_k : a.1 ≤ k) (b_le_k : b.1 ≤ k), lift₃ a_le_k a.2 = lift₃ b_le_k b.2
+
+theorem lift_self {n} (x : Raw κ n) : lift₃ (le_refl n) x = x := by
+  induction n
+  case zero => simp [lift₃, lift₂]
+
+
+
+
+theorem lift_lift (n m k : ℕ) (x : Raw κ n) (n_m : n ≤ m) (m_k : m ≤ k) :
+  lift₃ m_k (lift₃ n_m x) = lift₃ (le_trans n_m m_k) x := by
+  induction m_k
+  case refl =>
+
+
+instance : IsEquiv (Sigma (Raw κ)) onLift where
+  refl x := by
+    simp [onLift]
+    exists x.fst
+  symm x y h := by
+    let ⟨n, x⟩ := x
+    let ⟨m, y⟩ := y
+    let ⟨k, n_le_k, m_le_k, h₀⟩ := h
+    simp only [onLift] at *
+    simp only at n_le_k
+    simp only at m_le_k
+    exists k, m_le_k, n_le_k
+    rw [h₀]
+  trans x y z x_y y_z := by
+    let ⟨n_x, x⟩ := x
+    let ⟨n_y, y⟩ := y
+    let ⟨n_z, z⟩ := z
+    let ⟨k_xy, n_le_k_xy, m_le_k_xy, h₀_xy⟩ := x_y
+    let ⟨k_yz, n_le_k_yz, m_le_k_yz, h₀_yz⟩ := y_z
+    exists (max k_xy k_yz)
+    simp at *
+    simp at n_le_k_xy m_le_k_xy n_le_k_yz m_le_k_yz h₀_xy h₀_yz
+    exists (.inl n_le_k_xy), (.inr m_le_k_yz)
+
+
+
+
+end Raw
