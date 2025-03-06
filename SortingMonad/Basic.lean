@@ -1,76 +1,66 @@
 import Mathlib
+import Batteries.Data.RBMap.Basic
+
+open Batteries
 
 universe u v
 
-structure Terms (κ : Type u) (π : Type v) [Zero κ] where
-  powers : Finset π
-  coeffAt : π → κ
-  zero_elsewhere : ∀ p, p ∈ coeffAt.support ↔ p ∈ powers
+instance MapExt (C P : Type) [Zero C] [LinearOrder C] [LinearOrder P] : Setoid (RBMap P ({c : C // 0 < c}) compare) where
+  r x y := x.toList = y.toList
+  iseqv := {
+    refl x := rfl
+    symm := by
+      intros x y xy
+      apply xy.symm
+    trans := by
+      intros x y z xy yz
+      rw [xy, yz]
+  }
+
+def Terms (C P : Type) [Zero C] [LinearOrder C] [p_inst : LinearOrder P] :=
+  Quotient (MapExt C P)
 
 namespace Terms
 
-variable {κ : Type u} {π : Type v} [Zero κ]
+variable {C P : Type} [Zero C] [LinearOrder P] [LinearOrder C] (cmp : P → P → Ordering)
 
-instance : GetElem (Terms κ π) π κ (λ _ _ => True) where
-  getElem xs p _ := xs.coeffAt p
+def toDecList : Function.Embedding (Terms C P) (List (Lex (P × {c : C // 0 < c}))) where
+  toFun := Quotient.lift (λ x : RBMap _ _ _ => x.toList.reverse) <| by
+    intros a b a_equiv_b
+    simp
+    rw [a_equiv_b]
+  inj' := by
+    intros x y
+    induction x using Quotient.ind; case a x =>
+    induction y using Quotient.ind; case a y =>
+    simp
+    intros h
+    rw [Quotient.sound h]
 
-instance hc {α} [AddCommMagma α] : Std.Commutative (α := α) (· + ·) where
-  comm x y := by
-    rw [add_comm]
+instance : LinearOrder (Terms C P) where
+  le x y := x.toDecList ≤ y.toDecList
+  le_refl := by simp
+  le_trans := by
+    simp
+    intros x y z
+    apply le_trans
+  le_antisymm := by
+    simp;
+    intros a b a_le_b b_le_a
+    have := le_antisymm a_le_b b_le_a
+    apply Function.Embedding.injective toDecList this
+  decidableLE := by simp; infer_instance
+  le_total x y := by
+    simp
+    apply le_total
 
-def eval {κ π β} [Zero κ] [AddCommMonoid β] (onTerm : κ → π → β) (expr : Terms κ π) : β := by
-  apply expr.powers.fold (· + ·) 0 (λ p => onTerm expr[p] p)
-
-instance : EmptyCollection (Terms κ π) where
-  emptyCollection := ⟨∅, λ _ => 0, by simp⟩
-
-instance [DecidableEq π] [DecidableEq κ] : Coe (List (π × κ)) (Terms κ π) where
-  coe l :=
-    let f p := (l.lookup p).getD 0
-    let keys := (l.map Prod.fst).toFinset 
+def map {C' P'} [Zero C'] [LinearOrder C'] [LinearOrder P'] (f : P × {c : C // 0 < c} → P' × {c : C' // 0 < c}) : Terms C P → Terms C' P' :=
+  Quotient.map (λ x : RBMap _ _ _ => (x.toList.map f).toRBMap compare) <| by
+    simp
+    intros a b a_equiv_b
+    rw [a_equiv_b]
 
 end Terms
 
-def Gold' (κ : Type u) [Zero κ] : ℕ → Type u
-  | 0 => PEmpty
-  | n+1 => Terms κ (Gold' κ n)
-
-namespace Gold'
-
-variable {κ : Type u} [Zero κ]
-
-@[simp]
-theorem zero  : Gold' κ 0 = PEmpty := rfl
-
-@[simp]
-theorem succ {n} : Gold' κ (n+1) = Terms κ (Gold' κ n) := rfl
-
-instance {n} : EmptyCollection (Gold' κ (n+1)) where
-  emptyCollection := by simp [Gold']; exact ∅
-
-def eval {κ β} [Zero κ] [Ring β] [HomogeneousPow β] (base : β) (toβ : κ → β) : ∀ {n : ℕ}, Gold' κ n → β
-  | 0, _ => 0
-  | n+1, expr => Terms.eval (π := Gold' κ n) (onTerm := λ k p => toβ k * base ^ (Gold'.eval base toβ p)) expr
-
-end Gold'
-
-def Gold (κ : Type u) [Zero κ] := Σ n, Gold' κ n
-
-namespace Gold
-
-variable {κ : Type u} [Zero κ]
-
-instance : EmptyCollection (Gold κ) where
-  emptyCollection := ⟨1, ∅⟩
-
-def eval {κ β} [Zero κ] [Ring β] [HomogeneousPow β] (base : β) (toβ : κ → β) (expr : Gold κ) : β :=
-  expr.2.eval base toβ
-
-def toExpr (max : PNat) (n : ℕ) : Sigma (Gold (Fin (max+1))) :=
-  if n = 0
-  then ∅
-  else
-    let pn := Nat.log n b
-    let place := (max+1) ^ pn
-    let c := n / place
-    let r := n - c * place
+inductive Gold where
+  | mk :
