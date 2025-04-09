@@ -1,147 +1,328 @@
 import Mathlib
-import Batteries.Data.RBMap.Basic
 
-open Batteries
-open RBNode
+open unitInterval
 
-universe u v z
+namespace SimpleGraph
 
-namespace Batteries.RBSet
+variable {P} (g : SimpleGraph P)
 
-variable {α} (cmp : α → α → Ordering)
+def DEdge : Type := {p : P × P // g.Adj (p.fst) (p.snd)}
 
-abbrev RBS := RBSet _ cmp
+def DEdge.get (e : g.DEdge) : Fin 2 → P
+  | 0 => e.val.fst
+  | 1 => e.val.snd
 
-variable {cmp}
+instance : FunLike (DEdge g) (Fin 2) P where
+  coe s := s.get
+  coe_injective' := by
+    intros x y h
+    let ⟨(x₀, x₁), x_prop⟩ := x
+    let ⟨(y₀, y₁), y_prop⟩ := y
+    simp [DEdge] at *
+    split_ands
+    · have : DEdge.get g ⟨(x₀, x₁), x_prop⟩ 0 = x₀ := by simp [DEdge.get]
+      rw [← this, h, DEdge.get]
+    · have : DEdge.get g ⟨(x₀, x₁), x_prop⟩ 1 = x₁ := by simp [DEdge.get]
+      rw [← this, h, DEdge.get]
 
-section
+theorem DEdge.funLike_eq (d : g.DEdge) (b : Fin 2) : (d b) = DEdge.get g d b := rfl
 
-variable (c) {lval : RBNode α} (x) {rval : RBNode α}
+theorem DEdge.get_0 (d : g.DEdge) : d 0 = d.val.fst := rfl
 
-section
+theorem DEdge.get_1 (d : g.DEdge) : d 1 = d.val.snd := rfl
 
-variable (lr_wf : RBNode.WF cmp lval ∧ RBNode.WF cmp rval)
+def DEdge.symm : g.DEdge → g.DEdge
+  | ⟨(a, b), h⟩ => ⟨(b, a), h.symm⟩
 
-abbrev destruct_aux : RBS cmp × α × RBS cmp :=
-  ⟨⟨lval, lr_wf.1⟩, x, ⟨rval, lr_wf.2⟩⟩
+@[simp]
+theorem DEdge.get_symm_0 (d : g.DEdge) :
+  (d.symm) 0 = d 1 := by
+  let ⟨(i, j), adj⟩ := d
+  simp [DEdge.symm, DEdge.get_0, DEdge.get_1]
 
-end
+@[simp]
+theorem DEdge.get_symm_1 (d : g.DEdge) :
+  (d.symm) 1 = d 0 := by
+  let ⟨(i, j), adj⟩ := d
+  simp [DEdge.symm, DEdge.get_0, DEdge.get_1]
 
-variable {c x}
-variable (wf : RBNode.WF cmp (.node c lval x rval))
+@[simp]
+theorem DEdge.get_symm (d : g.DEdge) (b : Fin 2) :
+  (d.symm) b = d (1 - b) := by
+  let ⟨(i, j), adj⟩ := d
+  match b with
+  | 0 =>
+    rw [DEdge.get_symm_0]
+    simp
+  | 1 =>
+    rw [DEdge.get_symm_1]
+    simp
 
-include wf
-theorem children_wf : RBNode.WF cmp lval ∧ RBNode.WF cmp rval := by
-  simp at *
-  have ⟨⟨_, _, l_ord, r_ord⟩, ⟨bal_c, bal_n, bal⟩⟩ := wf
-  have ⟨l_bal, r_bal⟩ : (∃ c n, lval.Balanced c n) ∧ (∃ c n, rval.Balanced c n) := by
-    cases bal
-    case red lbal rbal =>
-      split_ands
-      · exists .black, bal_n
-      · exists .black, bal_n
-    case black lc n rc lbal rbal =>
-      split_ands
-      · exists lc, n
-      · exists rc, n
-  split_ands
-  · exact l_ord
-  · exact l_bal
-  · exact r_ord
-  · exact r_bal
+structure Drawing {P} (g : SimpleGraph P) where
+  (draw : g.DEdge → C(I, ℝ × ℝ))
+  (symm : ∀ h (t : I), draw h t = draw h.symm (σ t))
+  (consecutive : ∀ e₀ e₁ : g.DEdge, e₀ 1 = e₁ 0 → draw e₀ 1 = draw e₁ 0)
 
-end
+variable {g}
 
-def destruct : RBS cmp → Option (RBS cmp × α × RBS cmp)
-  | ⟨.nil, _⟩ => .none
-  | ⟨.node _ _ x _, wf⟩ => .some <| destruct_aux x <| children_wf wf
+def DEdge.symm_r (h₀ h₁ : g.DEdge) : Prop :=
+  h₀ = h₁ ∨ h₀.symm = h₁
 
-def left : RBS cmp → Option (RBS cmp) := λ x => x.destruct.map Prod.fst
+def DEdge.symm_r_symm {h₀ h₁ : g.DEdge} : h₀.symm_r h₁ → h₁.symm_r h₀
+  | Or.inl is_eq => Or.inl is_eq.symm
+  | Or.inr is_eq =>
+    let ⟨⟨h₀₀, h₀₁⟩, h₀_prop⟩ := h₀
+    let ⟨⟨h₁₀, h₁₁⟩, h₁_prop⟩ := h₁
+    Or.inr <| by
+      rw [Subtype.ext_iff] at *
+      simp [symm] at *
+      tauto
 
-def right : RBS cmp → Option (RBS cmp) := λ x => x.destruct.map (Prod.snd ∘ Prod.snd)
+def DEdge.symm_r_trans {h₀ h₁ h₂ : g.DEdge} : h₀.symm_r h₁ -> h₁.symm_r h₂ -> h₀.symm_r h₂
+  | Or.inl is_eq, h => by rw [is_eq]; exact h
+  | h, Or.inl is_eq => by rw [← is_eq]; exact h
+  | Or.inr p₁, Or.inr p₂ => by
+    left
+    let ⟨⟨h₀₀, h₀₁⟩, h₀_prop⟩ := h₀
+    let ⟨⟨h₁₀, h₁₁⟩, h₁_prop⟩ := h₁
+    let ⟨⟨h₂₀, h₂₁⟩, h₂_prop⟩ := h₂
+    rw [Subtype.ext_iff] at *
+    simp [DEdge.symm] at *
+    simp [p₁.1, p₂.2, p₁.2, p₂.1]
 
+def DEdge.irrefl : ∀ d : g.DEdge, ¬ d 0 = d 1
+  | ⟨(i, j), h⟩ => by
+    intros i_eq_j
+    cases i_eq_j
+    simp at *
 
+def SEdge : Type := Quotient {
+  r (x : g.DEdge) y := x = y ∨ x.symm = y
+  iseqv := ⟨by simp, DEdge.symm_r_symm, DEdge.symm_r_trans⟩
+}
 
-end RBSet
+abbrev SEdge.mk (a b : P) (h : g.Adj a b) : g.SEdge := Quotient.mk _ ⟨⟨a, b⟩, h⟩
 
-namespace RBMap
+def SEdge.ind [LinearOrder P] (motive : SEdge → Prop)
+  (H : ∀ (d : g.DEdge), d 0 < d 1 → motive (⟦d⟧) )
+  (s) : motive s := by
+    induction s using Quotient.inductionOn
+    case h d =>
+      by_cases lt_hyp : d 0 < d 1
+      · apply H d lt_hyp
+      · have : (⟦d⟧ : g.SEdge) = ⟦d.symm⟧ := by simp
+        rw [this]; clear this
+        apply H
+        rw [not_lt_iff_eq_or_lt, or_iff_right (DEdge.irrefl _)] at lt_hyp
+        let ⟨(i, j), adj⟩ := d; clear d
+        revert lt_hyp
+        simp
 
-end RBMap
+def NonCrossing (d : Drawing g) : Prop :=
+  ∀ h₁ h₂ t₁ t₂,
+    0 < t₁ → t₁ < 1 → 0 < t₂ → t₂ < 1 →
+    h₁ ≠ h₂.symm →
+    d.draw h₁ t₁ = d.draw h₂ t₂ →
+    h₂ = h₂ ∧ t₁ = t₂
 
-section Terms
+def InjectiveOnPoints (d : Drawing g) : Prop :=
+  ∀ h₁ h₂, d.draw h₁ 0 = d.draw h₂ 0 → h₁ 0 = h₂ 0
 
-variable (M : Type u) {P : Type v} [AddMonoid M] [Preorder M]
+abbrev Planar (d : Drawing g) := NonCrossing d ∧ InjectiveOnPoints d
 
-def Pos : Type u := Subtype (0 < · : M → Prop)
+abbrev anti_image (d : Drawing g) := {s : ℝ × ℝ // ¬ ∃ h t, d.draw h t = s}
 
--- Formal Polynomials with coefficients in M and Powers in P
-def Terms (pcmp : P → P → Ordering) : Type _ := RBMap P (Pos M) (cmp := pcmp)
+abbrev faces (d : Drawing g) := ConnectedComponents (anti_image d)
 
-variable {pcmp : P → P → _} {M}
+def NumVertexes (_ : Drawing g) : Cardinal := Cardinal.mk P
+def NumFaces (d : Drawing g) : Cardinal := (Cardinal.mk (faces d))
+def NumEdges (_ : Drawing g) : Cardinal := Cardinal.mk g.SEdge
 
-def Terms.monomial (p : P) (c : Pos (M := M)) : Terms M pcmp := RBMap.empty.insert p c
+noncomputable
+def EularCharacteristic (d : Drawing g) : Option ℤ := do
+  match (NumVertexes d).toENat, (NumEdges d).toENat, (NumFaces d).toENat with
+  | some V, some E, some F => pure (V - (E : ℤ) + F)
+  | _, _, _ => none
 
-def Terms.pop (x : Terms M pcmp) : Option ((Pos M × P) × Terms M pcmp) := do
-  x.max?.map <| λ (p, c) ↦ ((c, p), x.erase p)
+instance {n} : OfNat (Option ℤ) n where
+  ofNat := some (OfNat.ofNat n)
 
-instance : EmptyCollection (Terms M pcmp) := ⟨(∅ : RBMap _ _ _)⟩
-instance : Zero (Terms M pcmp) := ⟨∅⟩
+notation "𝔼" => EularCharacteristic
 
-theorem Terms.empty_is_nil : (∅ : Terms M pcmp) = ⟨.nil, .mk ⟨⟩ .nil⟩ := rfl
-theorem Terms.zero_is_nil : (0 : Terms M pcmp) = ⟨.nil, .mk ⟨⟩ .nil⟩ := rfl
+end SimpleGraph
 
-theorem Terms.pop_none_iff {x : Terms M pcmp} : (Terms.pop x).isNone ↔ (x = ∅) := by
-  rw [Terms.pop]
-  match x with
-  | {val := .nil, property := _} =>
-    simp [RBMap.max?, RBSet.max?, RBNode.max?]
-    rfl
-  | {val := .node c l v r, property := wf} =>
-    simp [RBMap.max?, RBSet.max?, RBNode.max?, Terms.empty_is_nil]
-    apply iff_of_false
-    clear * -
-    revert c l v
-    induction r
-    case nil => simp [RBNode.max?]
-    case node c l v r l_ih r_ih =>
-      intros c₀ l₀ v₀
-      simp [RBNode.max?]
-      apply r_ih
-    intros h
-    cases h
+def ngon : ∀ n, SimpleGraph (Fin n)
+  | n+2 => {
+    Adj i j := i + 1 = j ∨ j + 1 = i
+  }
+  | 0 => {
+    Adj _ _ := True
+    loopless := λ x => x.elim0
+    }
+  | 1 => {Adj _ _ := False}
 
-theorem Terms.pop_zero_eq_none : (0 : Terms M pcmp).pop = none := rfl
+open SimpleGraph
 
-def Terms.pop_size {xc xp xs} {x : Terms M pcmp} : some ((xc, xp), xs) = x.pop → x.size = xs.size + 1 :=
-  match x with
+namespace ThreeSides
+
+def toFun_aux : (ngon 3).DEdge → Fin 3
+  | ⟨⟨0, i⟩, _⟩ => i
+  | ⟨⟨i, 0⟩, _⟩ => i
+  | _ => 0
+
+def toFun : (ngon 3).SEdge → Fin 3 :=
+  Quotient.lift toFun_aux
+  <| by
+    intros h₀ h₁ hyp
+    cases hyp
+    case inl hyp => rw [hyp]
+    case inr hyp =>
+      let ⟨⟨i, j⟩, adj⟩ := h₀
+      rw [← hyp]; clear h₁ hyp h₀
+      simp [DEdge.symm, toFun_aux]
+      match i, j with
+      | 0, 0 => rfl
+      | 0, 1 => rfl
+      | 0, 2 => rfl
+      | 1, 0 => rfl
+      | 1, 1 => rfl
+      | 1, 2 => rfl
+      | 2, 0 => rfl
+      | 2, 1 => rfl
+      | 2, 2 => rfl
+
+def invFun : Fin 3 → (ngon 3).SEdge
   | 0 => by
-    intros h
-    rw [Terms.pop_zero_eq_none] at h
-    cases h
-  | ⟨.node c l v r, wf⟩ => by
-    simp [pop, RBMap.max?, RBSet.max?, Option.map]
-    match h : (RBNode.node c l v r).max? with
-    | none => simp
-    | some (w₀, _) =>
+    apply SEdge.mk 1 2
+    simp [ngon]
+  | 1 => by
+    apply SEdge.mk 0 1
+    simp [ngon]
+  | 2 => by
+    apply SEdge.mk 0 2
+    simp [ngon]
+
+def equivalence : (ngon 3).SEdge ≃ Fin 3 where
+  toFun := toFun
+  invFun := invFun
+  left_inv := by
+    intros x
+    induction x using SEdge.ind
+    case H d d_ord
+    let ⟨(d₀, d₁), adj⟩ := d
+    simp [DEdge.get_0, DEdge.get_1] at d_ord
+    match d₁ with
+    | 0 => cases d_ord
+    | 1 =>
+      simp at d_ord; simp [d_ord] at *
+      simp [toFun, toFun_aux, invFun, SEdge.mk]
+    | 2 =>
+      match d₀ with
+      | 0 => simp [toFun, toFun_aux, invFun, SEdge.mk]
+      | 1 => simp [toFun, toFun_aux, invFun, SEdge.mk]
+  right_inv := by
+    intros x
+    match x with
+    | 0 => simp [toFun, invFun, toFun_aux]
+    | 1 => simp [toFun, invFun, toFun_aux]
+    | 2 => simp [toFun, invFun, toFun_aux]
+
+theorem main (d : Drawing (ngon 3)) : NumEdges d = 3 := by
+  simp [NumEdges]
+  apply Cardinal.mk_eq_nat_iff.mpr
+  exact ⟨equivalence⟩
+
+end ThreeSides
+
+abbrev TriangleHaveThreeSides := ThreeSides.main
+
+open Real
+
+noncomputable
+def inflated_ngon_aux₀ (n a b : ℕ): C(I , ℝ) := {
+  toFun := λ i => 2 * π / (n - 1) * (a * σ i + b * i)
+  continuous_toFun := by continuity
+}
+
+noncomputable
+def inflated_ngon_aux₁ : C(ℝ , ℝ × ℝ) := {
+  toFun := Complex.equivRealProd ∘ Complex.exp ∘ (Complex.I * ·)
+  continuous_toFun := by continuity
+}
+
+open Complex
+
+infix:50 "⊚" => ContinuousMap.comp
+
+noncomputable
+def inflated_ngon_draw' {n} (e : DEdge (ngon n)) :=
+  ContinuousMap.comp (β := ℝ) inflated_ngon_aux₁ (inflated_ngon_aux₀ n (e 0) (e 1))
+
+noncomputable
+def inflated_ngon (n : ℕ) : Drawing (ngon n) where
+  draw := inflated_ngon_draw'
+  symm e t := by
+    simp [inflated_ngon_draw']
+    congr 1
+    simp [inflated_ngon_aux₀]
+    ring
+  consecutive e₀ e₁ end_eq_start := by
+    simp [inflated_ngon_draw']
+    congr 1
+    simp [inflated_ngon_aux₀, end_eq_start]
+
+theorem inflated_ngon.draw_def (n e) :
+  (inflated_ngon n).draw e =
+    inflated_ngon_aux₁ ∘ (inflated_ngon_aux₀ n (e 0) (e 1)) := by
+    simp [inflated_ngon, inflated_ngon_draw']
+
+namespace TwoFaces
+
+theorem inflated_ngon_image {n' : ℕ} (s : ℝ × ℝ) :
+  (∃ e i, (inflated_ngon (n := n' + 2)).draw e i = s) ↔ norm (equivRealProd.symm s) = 1 where
+  mp h := by
+    let n := n' + 2
+    let ⟨e, i, h⟩ := h
+    rw [← h]
+    simp [inflated_ngon.draw_def, inflated_ngon_aux₁, Complex.norm_eq_abs]
+    set t : Real := (inflated_ngon_aux₀ n ↑(e 0) ↑(e 1)) i
+    rw [Complex.abs_exp]
+    simp [Complex.I_mul]
+  mpr h := by
+    set n := n' + 2
+    let angle : Real := arg (equivRealProd.symm s)
+    let t : Real := angle * n / (2 * π)
+    let e₀ : Fin n := by
+      exists (⌊t⌋ + n).natAbs % n
+      apply Nat.mod_lt _
+      simp [n]
+    let i : I := by
+      exists t - ⌊t⌋
       simp
-      intros h₀ h₁ h₂
-      cases h₀
-      cases h₁
-      cases h₂
-      simp_rw [RBMap.size_eq]
-      rw []
+      apply le_of_lt
+      apply Int.fract_lt_one
+    let e : (ngon n).DEdge := by
+      exists ⟨e₀, e₀ + 1⟩
+      simp [ngon, n]
+    exists e
+    exists i
+    simp [inflated_ngon.draw_def, DEdge.get_0, DEdge.get_1, e]
+    simp [inflated_ngon_aux₀, inflated_ngon_aux₁]
+    have : ∀ (z : ℂ) (p : ℝ × ℝ), (z.re, z.im) = p ↔ z = equivRealProd.symm p := by
+      intros z p
+      let ⟨x', y'⟩ := z
+      let (x, y) := p
+      simp [equivRealProd]
+    rw [this]
+
+theorem main (d : Drawing (ngon 3)) : Planar d -> NumFaces d = 2 := by
+  simp [NumFaces, faces]
+  intros noncrossing inj
+  rw [Cardinal.mk_eq_two_iff]
+  have x : ConnectedComponents (anti_image d) := by
+    rw [ConnectedComponents]
+    apply Quotient.mk
+    exists (1, 1)
 
 
-def Terms.cmp (x y : Terms M pcmp) [DecidableLT M] : Ordering :=
-  match x.pop, y.pop with
-  | none, none => .eq
-  | some _, none => .gt
-  | none, some _ => .lt
-  | some ((xc, xp), xs), some ((yc, yp), ys) => (pcmp xp yp).then ((_root_.cmp xc.1 yc.1).then (cmp xs ys))
-  termination_by x.1.size
-
-end Terms
-
-variable (M : Type u) [AddMonoid M] [Preorder M]
-
-def Gold₀ : ℕ → Type u
+end TwoFaces
